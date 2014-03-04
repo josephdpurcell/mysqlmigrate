@@ -1,0 +1,493 @@
+#!/bin/bash
+VERSION="1.0"
+PROGNAME="mysqlmigrate"
+TEST=0
+DUMP=0
+IGNORE_DEFINER=0
+# INNODB_FILE_PER_TABLE is null by default
+# INNODB_FILE_FORMAT is null by default
+# SOURCE_FILE is null by default
+
+# set the mysql to use
+mysqldump='mysqldump'
+mysql='mysql'
+which $mysqldump
+if [ $? -ne 0 ]
+then
+    mysqldump='mysqldump5'
+    mysql='mysql5'
+fi
+
+# help statement
+function usage()
+{
+echo "
+NAME
+       mysqlmigrate - a tool for quickly and routinely migrating MySQL databases
+
+SYNOPSIS
+       mysqlmigrate [OPTION]... FROM_DB TO_DB [FIND_REGEX] [REPLACE]
+
+       mysqlmigrate [OPTION]... FILE TO_DB [FIND_REGEX] [REPLACE]
+
+       mysqlmigrate --dump [OPTION]... FROM_DB
+
+OPTIONS SUMMARY
+       Here is a short summary of the options available.
+
+        -h, --help                  show help
+        -v, --version               show the version
+        -t, --test                  run in test mode (prints config and commands)
+        -d, --dump                  only do a database dump
+        --innodb-file-format FORMAT set the innodb_file_format (i.e. Barracuda or Antelope)
+                                    NOTE: this sets it globally which will stick and affect the entire server
+        --innodb-file-per-table ON  sets innodb_file_per_table (can be ON or OFF)
+                                    NOTE: this sets it globally which will stick affect the entire server
+        --ignore-definer            Do not import DEFINER statements
+        --net-buffer-length         sets net_buffer_length in bytes (1000000 is 1 MB)
+        --max-allowed-packet        sets max_allowed_packet in bytes (1000000000 is 1 GB)
+        -s, --source FILE           use a source file instead of pulling FROM_DB
+        -u, --user USER             the FROM_DB and TO_DB user
+        -p, --password PASS         the FROM_DB and TO_DB password
+        --from-user USER            the FROM_DB user
+        --from-password PASS        the FROM_DB password
+        --from-host HOST            the FROM_DB host
+        --to-user USER              the TO_DB user
+        --to-password PASS          the TO_DB password
+        --to-host HOST              the TO_DB host
+
+USAGE
+      By default, mysqlmigrate will drop the entire database of the destination. So, to migrate from a remote database to a local database:
+
+          mysqlmigrate --from-user root --from-password password --from-host user@remoteserver.com --to-user root --to-password password database_name database_name
+
+      You'll notice that a file "database_name.sql" is created in the directory you are currently in. The next time you run the above command it will read from that file instead of grabbing the database again.
+
+      To migrate to a database from a file:
+
+          mysqlmigrate -u root -p password database_name.sql database_name
+
+      This is useful if, for example, you want to restore from an old backup like so:
+
+          mysqlmigrate -u root -p password database_name-20131203.sql database_name
+
+      To simply run a mysqldump:
+
+          mysqlmigrate -u root -p password -h user@remoteserver.com -d users
+
+      There are cases where the database you are migrating is too large and you need to use Barracuda, so do this:
+
+          mysqlmigrate --from-user user --from-password password --from-host user@remoteserver.com --to-user root --to-password password --innodb-file-format Barracuda --innodb-file-per-table ON --net-buffer-length 1000000 --max-allowed-packet 1000000000 database_name database_name
+
+      And, if you need to ignore the DEFINER statements:
+
+          mysqlmigrate --ignore-definer --from-user user --from-password password --from-host user@remoteserver.com --to-user root --to-password password --innodb-file-format Barracuda --innodb-file-per-table ON --net-buffer-length 1000000 --max-allowed-packet 1000000000 database_name database_name
+
+      Tip: if you like backups, make an alias \"[mvbup](https://github.com/josephdpurcell/dotfiles/blob/master/.bash_includes/aliases#L162)\" to quickly move the \"database_name.sql\" files to \"database_name-YYYYMMDD.sql\".
+
+SEE ALSO
+      mysqldump
+
+LICENSE
+      Copyright 2014 Joseph D. Purcell.
+
+      This program is free software; you can redistribute it and/or modify it under the terms of the MIT License. See LICENSE.txt for details. This script will hopefully be useful, but comse WITHOUT ANY WARRANTY, nor the implied warranty that it is useful to anyone.
+
+      https://github.com/josephdpurcell/mysqlmigrate
+
+" | less
+}
+
+# mysqldump
+function takeadump()
+{
+    local FILE=$1
+    if [ -z $FILE ]
+    then
+        if [ $TEST -eq 1 ]
+        then
+            echo "  $ $mysqldump $FROM_DB_USER_FLAG $FROM_DB_PASS_FLAG $FROM_DB_HOST_FLAG $FROM_DB"
+        else
+            $mysqldump $FROM_DB_USER_FLAG $FROM_DB_PASS_FLAG $FROM_DB_HOST_FLAG $FROM_DB
+        fi
+    else
+        echo "Taking a dump on $FILE"
+        if [ $TEST -eq 1 ]
+        then
+            echo "  $ $mysqldump $FROM_DB_USER_FLAG $FROM_DB_PASS_FLAG $FROM_DB_HOST_FLAG $FROM_DB | tee -a $FILE | grep --colour=never \"^--...\""
+        else
+            $mysqldump $FROM_DB_USER_FLAG $FROM_DB_PASS_FLAG $FROM_DB_HOST_FLAG $FROM_DB | tee -a $FILE | grep --colour=never "^--..."
+        fi
+    fi
+}
+
+SHORTOPTS="hvtds:u:p:"
+LONGOPTS="help,version,test,dump,innodb-file-format,innodb-file-per-table,ignore-definer,net-buffer-length,max-allowed-packet,user,password,from-user,from-password,from-host,to-user,to-password,to-host:"
+ARGS=$(getopt -s bash --options $SHORTOPTS --longoptions $LONGOPTS --name $PROGNAME -- "$@" )
+#eval set -- "$ARGS"
+while true
+do
+    case $1 in
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        -v|--version)
+            echo "mysqlmigrate version $VERSION"
+            exit 0
+            ;;
+        -t|--test)
+            TEST=1
+            ;;
+        -d|--dump)
+            DUMP=1
+            ;;
+        --innodb-file-per-table)
+            shift
+            INNODB_FILE_PER_TABLE=$1
+            ;;
+        --innodb-file-format)
+            shift
+            INNODB_FILE_FORMAT=$1
+            ;;
+        --ignore-definer)
+            IGNORE_DEFINER=1
+            ;;
+        --net-buffer-length)
+            shift
+            NET_BUFFER_LENGTH=$1
+            ;;
+        --max-allowed-packet)
+            shift
+            MAX_ALLOWED_PACKET=$1
+            ;;
+        -s|--source)
+            shift
+            SOURCE_FILE=$1
+            ;;
+        -u)
+            shift
+            FROM_DB_USER=$1
+            TO_DB_USER=$1
+            ;;
+        --user)
+            shift
+            FROM_DB_USER=$1
+            TO_DB_USER=$1
+            ;;
+        -p)
+            shift
+            FROM_DB_PASS=$1
+            TO_DB_PASS=$1
+            ;;
+        --password)
+            shift
+            FROM_DB_PASS=$1
+            TO_DB_PASS=$1
+            ;;
+        --from-user)
+            shift
+            FROM_DB_USER=$1
+            ;;
+        --from-password)
+            shift
+            FROM_DB_PASS=$1
+            ;;
+        --from-host)
+            shift
+            FROM_DB_HOST=$1
+            ;;
+        --to-user)
+            shift
+            TO_DB_USER=$1
+            ;;
+        --to-password)
+            shift
+            TO_DB_PASS=$1
+            ;;
+        --to-host)
+            shift
+            TO_DB_HOST=$1
+            ;;
+        --)
+            shift
+            break
+            ;;
+        *)
+            if [ "${1:0:1}" == "-" ]
+            then
+                echo "Unknown parameter: $1"
+                exit 0
+            fi
+            break
+            ;;
+    esac
+    shift
+done
+
+# INPUT
+if [ -z $SOURCE_FILE ] && [ ! -f $1 ]
+then
+    FROM_DB=$1
+    TO_DB=$2
+    FIND=$3
+    REPLACE=$4
+elif [ -f $1 ]
+then
+    SOURCE_FILE=$1
+    TO_DB=$2
+    FIND=$3
+    REPLACE=$4
+else
+    TO_DB=$1
+    FIND=$2
+    REPLACE=$3
+fi
+
+function echoconf()
+{
+    echo "CONFIGURATION:"
+    echo ""
+    echo "  from user: "$FROM_DB_USER
+    echo "  from pass: "$FROM_DB_PASS
+    echo "  from db:   "$FROM_DB
+    echo "  from host: "$FROM_DB_HOST
+    echo ""
+    echo "  to user: "$TO_DB_USER
+    echo "  to pass: "$TO_DB_PASS
+    echo "  to db:   "$TO_DB
+    echo "  to host: "$TO_DB_HOST
+    echo ""
+    echo "  find:    "$FIND
+    echo "  replace: "$REPLACE
+    echo ""
+}
+
+# SET FROM DB FLAGS
+if [ -z $SOURCE_FILE ]
+then
+    if [ -z $FROM_DB_USER ] || [ "$FROM_DB_USER" = "" ]
+    then
+        FROM_DB_USER_FLAG=""
+    else
+        FROM_DB_USER_FLAG="-u $FROM_DB_USER"
+    fi
+    if [ -z $FROM_DB_PASS ] || [ "$FROM_DB_PASS" = "" ]
+    then
+        FROM_DB_PASS_FLAG=""
+    else
+        FROM_DB_PASS_FLAG="-p$FROM_DB_PASS"
+    fi
+    if [ -z $FROM_DB_HOST ] || [ "$FROM_DB_HOST" = "" ]
+    then
+        FROM_DB_HOST_FLAG=""
+    else
+        FROM_DB_HOST_FLAG="-h $FROM_DB_HOST"
+        FROM_DB_HOSTNAME="@$FROM_DB_HOST"
+    fi
+fi
+# SET TO DB FLAGS
+if [ -z $TO_DB_PASS ] || [ "$TO_DB_PASS" = "" ]
+then
+    TO_DB_PASS_FLAG=""
+else
+    TO_DB_PASS_FLAG="-p$TO_DB_PASS"
+fi
+if [ -z $TO_DB_USER ] || [ "$TO_DB_USER" = "" ]
+then
+    TO_DB_USER_FLAG=""
+else
+    TO_DB_USER_FLAG="-u $TO_DB_USER"
+fi
+if [ -z $TO_DB_HOST ] || [ "$TO_DB_HOST" = "" ]
+then
+    TO_DB_HOST_FLAG=""
+else
+    TO_DB_HOST_FLAG="-h $TO_DB_HOST"
+    TO_DB_HOSTNAME="@$TO_DB_HOST"
+fi
+
+# HELP
+if [ -z $SOURCE_FILE ]
+then
+    if [ -z $FROM_DB ] || [[ -z $TO_DB && $DUMP -ne 1 ]] || [[ ! -z $FIND && -z $REPLACE  ]]
+    then
+        usage
+        exit 0
+    fi
+else
+    if [ -z $TO_DB ] || [[ ! -z $FIND && -z $REPLACE  ]]
+    then
+        usage
+        exit 0
+    fi
+fi
+
+# Print config if testing
+if [ $TEST -eq 1 ]
+then
+    echoconf
+fi
+
+# 1. take a dump
+if [ -z $SOURCE_FILE ]
+then
+    SOURCE_FILE="$FROM_DB.sql"
+    if [ -f $SOURCE_FILE ]
+    then
+        echo "Using mysql dump file $SOURCE_FILE..."
+    else
+        # a. check if from db exists
+        echo "Check if $FROM_DB exists..."
+        if [ $TEST -eq 1 ]
+        then
+            echo "  $ echo \"show databases\" | $mysql $FROM_DB_USER_FLAG $FROM_DB_PASS_FLAG $FROM_DB_HOST_FLAG | grep \"^$FROM_DB$\" > /dev/null"
+        else
+            echo "show databases" | $mysql $FROM_DB_USER_FLAG $FROM_DB_PASS_FLAG $FROM_DB_HOST_FLAG | grep "^$FROM_DB$" > /dev/null
+        fi
+        if [ $? -ne 0 ]
+        then
+            echo "The from database $FROM_DB does not exist."
+            exit 1
+        fi
+        # b. only dump
+        if [ $DUMP -eq 1 ]
+        then
+            echo "Taking a forced dump..."
+            echo -n "" > $SOURCE_FILE
+            takeadump $SOURCE_FILE
+            echo "Done."
+            exit 0
+        fi
+        # c. normal dump
+        if [ ! -f $SOURCE_FILE ]
+        then
+            echo "Taking a dump since $SOURCE_FILE was not found..."
+            if [ $TEST -eq 1 ]
+            then
+                echo "  $ $mysqldump $FROM_DB_USER_FLAG $FROM_DB_PASS_FLAG $FROM_DB_HOST_FLAG $FROM_DB | tee $SOURCE_FILE | grep --colour=never \"^--.\""
+            else
+                takeadump $SOURCE_FILE
+            fi
+        else
+            echo "Using mysql dump file $SOURCE_FILE..."
+        fi
+    fi
+else
+    if [ ! -f $SOURCE_FILE ]
+    then
+        echo "Source file $SOURCE_FILE does not exist."
+        exit 1
+    else
+        echo "Using mysql dump file $SOURCE_FILE..."
+    fi
+fi
+
+# set a helper
+if [ -z $TO_DB_HOST ]
+then
+    TO_DB_HOST_AND_DB="$TO_DB@localhost"
+else
+    TO_DB_HOST_AND_DB="$TO_DB@$TO_DB_HOST"
+fi
+
+# 2. (re)create destination DB
+# a. delete db if exists
+echo "Check if destination database $TO_DB_HOST_AND_DB exists..."
+if [ $TEST -eq 1 ]
+then
+    echo "  $ echo \"show databases\" | $mysql $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG | grep \"^$TO_DB$\" > /dev/null"
+    # pretend we are dropping the DB
+    test false
+else
+    echo "show databases" | $mysql $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG | grep "^$TO_DB$" > /dev/null
+fi
+if [ $? -eq 0 ]
+then
+    echo "Dropping destination database $TO_DB_HOST_AND_DB..."
+    if [ $TEST -eq 1 ]
+    then
+        echo "  $ echo \"drop database \`$TO_DB\`\" | $mysql $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG"
+    else
+        echo "drop database \`$TO_DB\`" | $mysql $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG
+    fi
+fi
+
+# b. create db
+echo "Creating destination database $TO_DB_HOST_AND_DB $TO_DB..."
+if [ $TEST -eq 1 ]
+then
+    echo "  $ echo \"create database \`$TO_DB\`\" | $mysql $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG"
+else
+    echo "create database \`$TO_DB\`" | $mysql $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG
+fi
+
+if [ $? -ne 0 ]
+then
+    echo "Uknown error occurred when creating database $TO_DB$TO_DB_HOSTNAME."
+    exit 1
+fi
+
+# 3. import data
+if [ -z $FROM_DB ]
+then
+    echo "Migrating from $SOURCE_FILE to $TO_DB_HOST_AND_DB..."
+else
+    echo "Migrating from $FROM_DB@$FROM_DB_HOST to $TO_DB_HOST_AND_DB..."
+fi
+# a. set innodb flags
+IMPORT_FLAGS=''
+if [ ! -z $INNODB_FILE_PER_TABLE ]
+then
+    IMPORT_FLAGS="SET GLOBAL innodb_file_per_table=$INNODB_FILE_PER_TABLE;\n"
+fi
+if [ ! -z $INNODB_FILE_FORMAT ]
+then
+    IMPORT_FLAGS=$IMPORT_FLAGS"SET GLOBAL innodb_file_format=$INNODB_FILE_FORMAT;\n"
+fi
+# b. set import flags
+IMPORT_FLAGS=''
+if [ ! -z $NET_BUFFER_LENGTH ]
+then
+    IMPORT_FLAGS="SET GLOBAL net_buffer_length=$NET_BUFFER_LENGTH;\n"
+fi
+if [ ! -z $MAX_ALLOWED_PACKET ]
+then
+    IMPORT_FLAGS=$IMPORT_FLAGS"SET GLOBAL max_allowed_packet=$MAX_ALLOWED_PACKET;\n"
+fi
+# b. import
+if [ ! -z $FIND ] && [ ! -z $REPLACE ]
+then
+    if [ $TEST -eq 1 ]
+    then
+        echo "  $ (echo -e -n $IMPORT_FLAGS; cat $SOURCE_FILE) | sed \"s/$FIND/$REPLACE/g\" | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB"
+    else
+        (echo -e -n $IMPORT_FLAGS; cat $SOURCE_FILE) | sed "s/$FIND/$REPLACE/g" | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB
+    fi
+else
+    if [ $TEST -eq 1 ]
+    then
+        if [ $IGNORE_DEFINER -eq 1 ]
+        then
+            echo "  $ (echo $IMPORT_FLAGS; cat $SOURCE_FILE | grep -v "DEFINER") | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB"
+        else
+            echo "  $ (echo $IMPORT_FLAGS; cat $SOURCE_FILE) | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB"
+        fi
+    else
+        if [ $IGNORE_DEFINER -eq 1 ]
+        then
+            (echo -e $IMPORT_FLAGS; cat $SOURCE_FILE | grep -v "DEFINER") | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB
+        else
+            (echo -e $IMPORT_FLAGS; cat $SOURCE_FILE) | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB
+        fi
+    fi
+fi
+if [ $? -ne 0 ]
+then
+    echo ""
+    echo "There was an error! If the error was ERROR 1118 (42000) Row size too large, try using the following flags: --innodb-file-format Barracuda and --innodb-file-per-table ON."
+    exit 1
+fi
+echo "Done."
+exit 0
+
