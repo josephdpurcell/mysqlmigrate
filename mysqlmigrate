@@ -4,6 +4,7 @@ PROGNAME="mysqlmigrate"
 TEST=0
 DUMP=0
 IGNORE_DEFINER=0
+STRUCTURE=0
 # INNODB_FILE_PER_TABLE is null by default
 # INNODB_FILE_FORMAT is null by default
 # SOURCE_FILE is null by default
@@ -55,6 +56,7 @@ OPTIONS SUMMARY
         --to-user USER              the TO_DB user
         --to-password PASS          the TO_DB password
         --to-host HOST              the TO_DB host
+        --structure                 only migrate the structure
 
 USAGE
       By default, mysqlmigrate will drop the entire database of the destination. So, to migrate from a remote database to a local database:
@@ -106,23 +108,23 @@ function takeadump()
     then
         if [ $TEST -eq 1 ]
         then
-            echo "  $ $mysqldump $FROM_DB_USER_FLAG $FROM_DB_PASS_FLAG $FROM_DB_HOST_FLAG $FROM_DB"
+            echo "  $ $mysqldump $MYSQLDUMP_FLAGS $FROM_DB"
         else
-            $mysqldump $FROM_DB_USER_FLAG $FROM_DB_PASS_FLAG $FROM_DB_HOST_FLAG $FROM_DB
+            $mysqldump $MYSQLDUMP_FLAGS $FROM_DB
         fi
     else
         echo "Taking a dump on $FILE"
         if [ $TEST -eq 1 ]
         then
-            echo "  $ $mysqldump $FROM_DB_USER_FLAG $FROM_DB_PASS_FLAG $FROM_DB_HOST_FLAG $FROM_DB | tee -a $FILE | grep --colour=never \"^--...\""
+            echo "  $ $mysqldump $MYSQLDUMP_FLAGS $FROM_DB | tee -a $FILE | grep --colour=never \"^--...\""
         else
-            $mysqldump $FROM_DB_USER_FLAG $FROM_DB_PASS_FLAG $FROM_DB_HOST_FLAG $FROM_DB | tee -a $FILE | grep --colour=never "^--..."
+            $mysqldump $MYSQLDUMP_FLAGS $FROM_DB | tee -a $FILE | grep --colour=never "^--..."
         fi
     fi
 }
 
 SHORTOPTS="hvtds:u:p:"
-LONGOPTS="help,version,test,dump,innodb-file-format,innodb-file-per-table,ignore-definer,net-buffer-length,max-allowed-packet,user,password,from-user,from-password,from-host,to-user,to-password,to-host:"
+LONGOPTS="help,version,test,dump,innodb-file-format,innodb-file-per-table,ignore-definer,net-buffer-length,max-allowed-packet,user,password,from-user,from-password,from-host,to-user,to-password,to-host,structure:"
 ARGS=$(getopt -s bash --options $SHORTOPTS --longoptions $LONGOPTS --name $PROGNAME -- "$@" )
 #eval set -- "$ARGS"
 while true
@@ -208,6 +210,9 @@ do
         --to-host)
             shift
             TO_DB_HOST=$1
+            ;;
+        --structure)
+            STRUCTURE=1
             ;;
         --)
             shift
@@ -306,6 +311,13 @@ else
     TO_DB_HOST_FLAG="-h $TO_DB_HOST"
     TO_DB_HOSTNAME="@$TO_DB_HOST"
 fi
+# SET OTHER DB FLAGS
+if [ $STRUCTURE -eq 1 ]
+then
+    STRUCTURE_FLAG=' -d';
+else
+    STRUCTURE_FLAG='';
+fi
 
 # HELP
 if [ -z $SOURCE_FILE ]
@@ -329,7 +341,11 @@ then
     echoconf
 fi
 
-# 1. take a dump
+# 1. compile flags
+MYSQL_FLAGS="$FROM_DB_USER_FLAG $FROM_DB_PASS_FLAG $FROM_DB_HOST_FLAG"
+MYSQLDUMP_FLAGS="$STRUCTURE_FLAG $FROM_DB_USER_FLAG $FROM_DB_PASS_FLAG $FROM_DB_HOST_FLAG"
+
+# 2. take a dump
 if [ -z $SOURCE_FILE ]
 then
     SOURCE_FILE="$FROM_DB.sql"
@@ -341,9 +357,9 @@ then
         echo "Check if $FROM_DB exists..."
         if [ $TEST -eq 1 ]
         then
-            echo "  $ echo \"show databases\" | $mysql $FROM_DB_USER_FLAG $FROM_DB_PASS_FLAG $FROM_DB_HOST_FLAG | grep \"^$FROM_DB$\" > /dev/null"
+            echo "  $ echo \"show databases\" | $mysql $MYSQL_FLAGS | grep \"^$FROM_DB$\" > /dev/null"
         else
-            echo "show databases" | $mysql $FROM_DB_USER_FLAG $FROM_DB_PASS_FLAG $FROM_DB_HOST_FLAG | grep "^$FROM_DB$" > /dev/null
+            echo "show databases" | $mysql $MYSQL_FLAGS | grep "^$FROM_DB$" > /dev/null
         fi
         if [ $? -ne 0 ]
         then
@@ -353,11 +369,19 @@ then
         # b. only dump
         if [ $DUMP -eq 1 ]
         then
-            echo "Taking a forced dump..."
-            echo -n "" > $SOURCE_FILE
-            takeadump $SOURCE_FILE
-            echo "Done."
-            exit 0
+            if [ $TEST -eq 1 ]
+            then
+                echo "Taking a forced dump..."
+                takeadump $SOURCE_FILE
+                echo "Done."
+                exit 0
+            else
+                echo "Taking a forced dump..."
+                echo -n "" > $SOURCE_FILE
+                takeadump $SOURCE_FILE
+                echo "Done."
+                exit 0
+            fi
         fi
         # c. normal dump
         if [ ! -f $SOURCE_FILE ]
@@ -365,7 +389,7 @@ then
             echo "Taking a dump since $SOURCE_FILE was not found..."
             if [ $TEST -eq 1 ]
             then
-                echo "  $ $mysqldump $FROM_DB_USER_FLAG $FROM_DB_PASS_FLAG $FROM_DB_HOST_FLAG $FROM_DB | tee $SOURCE_FILE | grep --colour=never \"^--.\""
+                echo "  $ $mysqldump $MYSQLDUMP_FLAGS $FROM_DB | tee $SOURCE_FILE | grep --colour=never \"^--.\""
             else
                 takeadump $SOURCE_FILE
             fi
@@ -391,7 +415,7 @@ else
     TO_DB_HOST_AND_DB="$TO_DB@$TO_DB_HOST"
 fi
 
-# 2. (re)create destination DB
+# 3. (re)create destination DB
 # a. delete db if exists
 echo "Check if destination database $TO_DB_HOST_AND_DB exists..."
 if [ $TEST -eq 1 ]
@@ -428,7 +452,7 @@ then
     exit 1
 fi
 
-# 3. import data
+# 4. import data
 if [ -z $FROM_DB ]
 then
     echo "Migrating from $SOURCE_FILE to $TO_DB_HOST_AND_DB..."
