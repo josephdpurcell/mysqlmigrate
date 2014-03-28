@@ -8,6 +8,7 @@ IGNORE_AUTO_INCREMENT=0
 STRUCTURE=0
 FORCE=0
 OVERWRITE=0
+NO_DROP=0
 # INNODB_FILE_PER_TABLE is null by default
 # INNODB_FILE_FORMAT is null by default
 # SOURCE_FILE is null by default
@@ -27,6 +28,7 @@ function echoconf()
     echo "CONFIGURATION:"
     echo ""
     echo "  source file: "$SOURCE_FILE
+    echo "  bootstrap file: "$BOOTSTRAP_FILE
     echo ""
     echo "  from user: "$FROM_DB_USER
     echo "  from pass: "$FROM_DB_PASS
@@ -64,6 +66,8 @@ OPTIONS SUMMARY
         -v, --version               show the version
         -t, --test                  run in test mode (prints config and commands)
         -d, --dump                  only do a database dump
+        --no-drop                   don't drop the database
+        --bootstrap                 a SQL file to run before importing the database (e.g. variables)
         --innodb-file-format FORMAT set the innodb_file_format (i.e. Barracuda or Antelope)
                                     NOTE: this sets it globally which will stick and affect the entire server
         --innodb-file-per-table ON  sets innodb_file_per_table (can be ON or OFF)
@@ -189,7 +193,7 @@ function takeadump()
 
 # read parameters
 SHORTOPTS="hvtdfs:u:p:"
-LONGOPTS="help,version,test,dump,overwrite,force,innodb-file-format,innodb-file-per-table,ignore-definer,ignore-auto-increment,net-buffer-length,max-allowed-packet,user,password,from-user,from-password,from-host,from-db,to-user,to-password,to-host,to-db,structure:"
+LONGOPTS="help,version,test,dump,no-drop,bootstrap,overwrite,force,innodb-file-format,innodb-file-per-table,ignore-definer,ignore-auto-increment,net-buffer-length,max-allowed-packet,user,password,from-user,from-password,from-host,from-db,to-user,to-password,to-host,to-db,structure:"
 ARGS=$(getopt -s bash --options $SHORTOPTS --longoptions $LONGOPTS --name $PROGNAME -- "$@" )
 #eval set -- "$ARGS"
 while true
@@ -215,6 +219,9 @@ do
         -f|--force)
             FORCE=1
             ;;
+        --no-drop)
+            NO_DROP=1
+            ;;
         --innodb-file-per-table)
             shift
             INNODB_FILE_PER_TABLE=$1
@@ -236,6 +243,15 @@ do
         --max-allowed-packet)
             shift
             MAX_ALLOWED_PACKET=$1
+            ;;
+        --bootstrap)
+            shift
+            BOOTSTRAP_FILE=$1
+            if [ ! -f $BOOTSTRAP_FILE ]
+            then
+                echo "Bootstrap file does not exist: "$BOOTSTRAP_FILE
+                exit 1
+            fi
             ;;
         -s|--source)
             shift
@@ -551,40 +567,43 @@ else
 fi
 
 # 3. (re)create destination DB
-# a. delete db if exists
-echo "Check if destination database $TO_DB_HOST_AND_DB exists..."
-if [ $TEST -eq 1 ]
+if [ $NO_DROP -eq 0 ]
 then
-    echo "  $ echo \"show databases\" | $mysql $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG | grep \"^$TO_DB$\" > /dev/null"
-    # pretend we are dropping the DB
-    test false
-else
-    echo "show databases" | $mysql $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG | grep "^$TO_DB$" > /dev/null
-fi
-if [ $? -eq 0 ]
-then
-    echo "Dropping destination database $TO_DB_HOST_AND_DB..."
+    # a. delete db if exists
+    echo "Check if destination database $TO_DB_HOST_AND_DB exists..."
     if [ $TEST -eq 1 ]
     then
-        echo "  $ echo \"drop database \`$TO_DB\`\" | $mysql $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG"
+        echo "  $ echo \"show databases\" | $mysql $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG | grep \"^$TO_DB$\" > /dev/null"
+        # pretend we are dropping the DB
+        test false
     else
-        echo "drop database \`$TO_DB\`" | $mysql $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG
+        echo "show databases" | $mysql $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG | grep "^$TO_DB$" > /dev/null
     fi
-fi
+    if [ $? -eq 0 ]
+    then
+        echo "Dropping destination database $TO_DB_HOST_AND_DB..."
+        if [ $TEST -eq 1 ]
+        then
+            echo "  $ echo \"drop database \`$TO_DB\`\" | $mysql $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG"
+        else
+            echo "drop database \`$TO_DB\`" | $mysql $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG
+        fi
+    fi
 
-# b. create db
-echo "Creating destination database $TO_DB_HOST_AND_DB $TO_DB..."
-if [ $TEST -eq 1 ]
-then
-    echo "  $ echo \"create database \`$TO_DB\`\" | $mysql $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG"
-else
-    echo "create database \`$TO_DB\`" | $mysql $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG
-fi
+    # b. create db
+    echo "Creating destination database $TO_DB_HOST_AND_DB $TO_DB..."
+    if [ $TEST -eq 1 ]
+    then
+        echo "  $ echo \"create database \`$TO_DB\`\" | $mysql $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG"
+    else
+        echo "create database \`$TO_DB\`" | $mysql $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG
+    fi
 
-if [ $? -ne 0 ]
-then
-    echo "Uknown error occurred when creating database $TO_DB$TO_DB_HOSTNAME."
-    exit 1
+    if [ $? -ne 0 ]
+    then
+        echo "Uknown error occurred when creating database $TO_DB$TO_DB_HOSTNAME."
+        exit 1
+    fi
 fi
 
 # 4. import data
@@ -614,7 +633,18 @@ if [ ! -z $MAX_ALLOWED_PACKET ]
 then
     IMPORT_FLAGS=$IMPORT_FLAGS"SET GLOBAL max_allowed_packet=$MAX_ALLOWED_PACKET;\n"
 fi
+
 # b. import
+if [ -z $IMPORT_FLAGS ]
+then
+    BOOT_DATA=''
+else
+    BOOT_DATA=`echo -e $IMPORT_FLAGS`
+fi
+if [ ! -z $BOOTSTRAP_FILE ] && [ -f $BOOTSTRAP_FILE ]
+then
+    BOOT_DATA=$BOOT_DATA`cat $BOOTSTRAP_FILE`
+fi
 if [ ! -z $FIND ] && [ ! -z $REPLACE ]
 then
     if [ $TEST -eq 1 ]
@@ -630,16 +660,16 @@ else
         then
             if [ $IGNORE_AUTO_INCREMENT -eq 1 ]
             then
-                echo "  $ (echo $IMPORT_FLAGS; cat $SOURCE_FILE | grep -v \"DEFINER\" | sed \"s/ AUTO_INCREMENT=[0-9]*//g\") | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB"
+                echo "  $ (echo -n $BOOT_DATA; cat $SOURCE_FILE | grep -v \"DEFINER\" | sed \"s/ AUTO_INCREMENT=[0-9]*//g\") | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB"
             else
-                echo "  $ (echo $IMPORT_FLAGS; cat $SOURCE_FILE | grep -v \"DEFINER\") | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB"
+                echo "  $ (echo -n $BOOT_DATA; cat $SOURCE_FILE | grep -v \"DEFINER\") | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB"
             fi
         else
             if [ $IGNORE_AUTO_INCREMENT -eq 1 ]
             then
-                echo "  $ (echo $IMPORT_FLAGS; cat $SOURCE_FILE | sed \"s/ AUTO_INCREMENT=[0-9]*//g\") | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB"
+                echo "  $ (echo -n $BOOT_DATA; cat $SOURCE_FILE | sed \"s/ AUTO_INCREMENT=[0-9]*//g\") | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB"
             else
-                echo "  $ (echo $IMPORT_FLAGS; cat $SOURCE_FILE) | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB"
+                echo "  $ (echo -n $BOOT_DATA; cat $SOURCE_FILE) | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB"
             fi
         fi
     else
@@ -647,16 +677,16 @@ else
         then
             if [ $IGNORE_AUTO_INCREMENT -eq 1 ]
             then
-                (echo -e $IMPORT_FLAGS; cat $SOURCE_FILE | grep -v "DEFINER" | sed "s/ AUTO_INCREMENT=[0-9]*//g") | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB
+                (echo -n $BOOT_DATA; cat $SOURCE_FILE | grep -v "DEFINER" | sed "s/ AUTO_INCREMENT=[0-9]*//g") | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB
             else
-                (echo -e $IMPORT_FLAGS; cat $SOURCE_FILE | grep -v "DEFINER") | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB
+                (echo -n $BOOT_DATA; cat $SOURCE_FILE | grep -v "DEFINER") | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB
             fi
         else
             if [ $IGNORE_AUTO_INCREMENT -eq 1 ]
             then
-                (echo -e $IMPORT_FLAGS; cat $SOURCE_FILE | sed "s/ AUTO_INCREMENT=[0-9]*//g") | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB
+                (echo -n $BOOT_DATA; cat $SOURCE_FILE | sed "s/ AUTO_INCREMENT=[0-9]*//g") | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB
             else
-                (echo -e $IMPORT_FLAGS; cat $SOURCE_FILE) | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB
+                (echo -n $BOOT_DATA; cat $SOURCE_FILE) | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB
             fi
         fi
     fi
