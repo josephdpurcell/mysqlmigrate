@@ -4,20 +4,44 @@ PROGNAME="mysqlmigrate"
 TEST=0
 DUMP=0
 IGNORE_DEFINER=0
+IGNORE_AUTO_INCREMENT=0
 STRUCTURE=0
+FORCE=0
+OVERWRITE=0
 # INNODB_FILE_PER_TABLE is null by default
 # INNODB_FILE_FORMAT is null by default
 # SOURCE_FILE is null by default
 
 # set the mysql to use
-mysqldump='mysqldump'
-mysql='mysql'
-which $mysqldump
+mysqldump=`which mysqldump`
+mysql=`which mysql`
 if [ $? -ne 0 ]
 then
-    mysqldump='mysqldump5'
-    mysql='mysql5'
+    mysqldump=`which mysqldump5`
+    mysql=`which mysql5`
 fi
+
+# print config
+function echoconf()
+{
+    echo "CONFIGURATION:"
+    echo ""
+    echo "  source file: "$SOURCE_FILE
+    echo ""
+    echo "  from user: "$FROM_DB_USER
+    echo "  from pass: "$FROM_DB_PASS
+    echo "  from db:   "$FROM_DB
+    echo "  from host: "$FROM_DB_HOST
+    echo ""
+    echo "  to user: "$TO_DB_USER
+    echo "  to pass: "$TO_DB_PASS
+    echo "  to db:   "$TO_DB
+    echo "  to host: "$TO_DB_HOST
+    echo ""
+    echo "  find:    "$FIND
+    echo "  replace: "$REPLACE
+    echo ""
+}
 
 # help statement
 function usage()
@@ -45,6 +69,7 @@ OPTIONS SUMMARY
         --innodb-file-per-table ON  sets innodb_file_per_table (can be ON or OFF)
                                     NOTE: this sets it globally which will stick affect the entire server
         --ignore-definer            Do not import DEFINER statements
+        --ignore-auto-increment     Ignore the auto increment definitions in export
         --net-buffer-length         sets net_buffer_length in bytes (1000000 is 1 MB)
         --max-allowed-packet        sets max_allowed_packet in bytes (1000000000 is 1 GB)
         -s, --source FILE           use a source file instead of pulling FROM_DB
@@ -53,10 +78,14 @@ OPTIONS SUMMARY
         --from-user USER            the FROM_DB user
         --from-password PASS        the FROM_DB password
         --from-host HOST            the FROM_DB host
+        --from-db DB                the FROM_DB database
         --to-user USER              the TO_DB user
         --to-password PASS          the TO_DB password
         --to-host HOST              the TO_DB host
-        --structure                 only migrate the structure
+        --to-db DB                  the TO_DB database
+        --structure                 only migrate the structure (won't be used if a dump file exists)
+        --overwrite                 overwrite any dump file automatically found (i.e. from_db.sql)
+        -f, --force                 force things to happen (for now, equivalent to --overwrite)
 
 USAGE
       By default, mysqlmigrate will drop the entire database of the destination. So, to migrate from a remote database to a local database:
@@ -113,18 +142,54 @@ function takeadump()
             $mysqldump $MYSQLDUMP_FLAGS $FROM_DB
         fi
     else
-        echo "Taking a dump on $FILE"
+        if [ -z $FROM_DB ]
+        then
+            echo "You must specify a from database!"
+            exit 1
+        fi
+        echo "Taking a dump on $FILE..."
         if [ $TEST -eq 1 ]
         then
-            echo "  $ $mysqldump $MYSQLDUMP_FLAGS $FROM_DB | tee -a $FILE | grep --colour=never \"^--...\""
+            if [ $IGNORE_DEFINER -eq 1 ]
+            then
+                if [ $IGNORE_AUTO_INCREMENT -eq 1 ]
+                then
+                    echo "  $ $mysqldump $MYSQLDUMP_FLAGS $FROM_DB | grep -v \"DEFINER\" | sed \"s/ AUTO_INCREMENT=[0-9]*//g\" | tee -a $FILE | grep --colour=never \"^--...\""
+                else
+                    echo "  $ $mysqldump $MYSQLDUMP_FLAGS $FROM_DB | grep -v \"DEFINER\" | tee -a $FILE | grep --colour=never \"^--...\""
+                fi
+            else
+                if [ $IGNORE_AUTO_INCREMENT -eq 1 ]
+                then
+                    echo "  $ $mysqldump $MYSQLDUMP_FLAGS $FROM_DB | sed \"s/ AUTO_INCREMENT=[0-9]*//g\" | tee -a $FILE | grep --colour=never \"^--...\""
+                else
+                    echo "  $ $mysqldump $MYSQLDUMP_FLAGS $FROM_DB | tee -a $FILE | grep --colour=never \"^--...\""
+                fi
+            fi
         else
-            $mysqldump $MYSQLDUMP_FLAGS $FROM_DB | tee -a $FILE | grep --colour=never "^--..."
+            if [ $IGNORE_DEFINER -eq 1 ]
+            then
+                if [ $IGNORE_AUTO_INCREMENT -eq 1 ]
+                then
+                    $mysqldump $MYSQLDUMP_FLAGS $FROM_DB | grep -v "DEFINER" | sed "s/ AUTO_INCREMENT=[0-9]*//g" | tee -a $FILE | grep --colour=never "^--..."
+                else
+                    $mysqldump $MYSQLDUMP_FLAGS $FROM_DB | grep -v "DEFINER" | tee -a $FILE | grep --colour=never "^--..."
+                fi
+            else
+                if [ $IGNORE_AUTO_INCREMENT -eq 1 ]
+                then
+                    $mysqldump $MYSQLDUMP_FLAGS $FROM_DB | sed "s/ AUTO_INCREMENT=[0-9]*//g" | tee -a $FILE | grep --colour=never "^--..."
+                else
+                    $mysqldump $MYSQLDUMP_FLAGS $FROM_DB | tee -a $FILE | grep --colour=never "^--..."
+                fi
+            fi
         fi
     fi
 }
 
-SHORTOPTS="hvtds:u:p:"
-LONGOPTS="help,version,test,dump,innodb-file-format,innodb-file-per-table,ignore-definer,net-buffer-length,max-allowed-packet,user,password,from-user,from-password,from-host,to-user,to-password,to-host,structure:"
+# read parameters
+SHORTOPTS="hvtdfs:u:p:"
+LONGOPTS="help,version,test,dump,overwrite,force,innodb-file-format,innodb-file-per-table,ignore-definer,ignore-auto-increment,net-buffer-length,max-allowed-packet,user,password,from-user,from-password,from-host,from-db,to-user,to-password,to-host,to-db,structure:"
 ARGS=$(getopt -s bash --options $SHORTOPTS --longoptions $LONGOPTS --name $PROGNAME -- "$@" )
 #eval set -- "$ARGS"
 while true
@@ -144,6 +209,12 @@ do
         -d|--dump)
             DUMP=1
             ;;
+        --overwrite)
+            OVERWRITE=1
+            ;;
+        -f|--force)
+            FORCE=1
+            ;;
         --innodb-file-per-table)
             shift
             INNODB_FILE_PER_TABLE=$1
@@ -154,6 +225,9 @@ do
             ;;
         --ignore-definer)
             IGNORE_DEFINER=1
+            ;;
+        --ignore-auto-increment)
+            IGNORE_AUTO_INCREMENT=1
             ;;
         --net-buffer-length)
             shift
@@ -166,6 +240,11 @@ do
         -s|--source)
             shift
             SOURCE_FILE=$1
+            if [ ! -f $SOURCE_FILE ]
+            then
+                echo "Source file does not exist: "$SOURCE_FILE
+                exit 1
+            fi
             ;;
         -u)
             shift
@@ -199,6 +278,10 @@ do
             shift
             FROM_DB_HOST=$1
             ;;
+        --from-db)
+            shift
+            FROM_DB=$1
+            ;;
         --to-user)
             shift
             TO_DB_USER=$1
@@ -210,6 +293,10 @@ do
         --to-host)
             shift
             TO_DB_HOST=$1
+            ;;
+        --to-db)
+            shift
+            TO_DB=$1
             ;;
         --structure)
             STRUCTURE=1
@@ -231,42 +318,31 @@ do
 done
 
 # INPUT
-if [ -z $SOURCE_FILE ] && [ ! -f $1 ]
-then
-    FROM_DB=$1
-    TO_DB=$2
-    FIND=$3
-    REPLACE=$4
-elif [ -f $1 ]
+if [[ ! -z $1 ]] && [[ -f $1 ]]
 then
     SOURCE_FILE=$1
-    TO_DB=$2
-    FIND=$3
-    REPLACE=$4
-else
-    TO_DB=$1
-    FIND=$2
-    REPLACE=$3
+    shift
 fi
-
-function echoconf()
-{
-    echo "CONFIGURATION:"
-    echo ""
-    echo "  from user: "$FROM_DB_USER
-    echo "  from pass: "$FROM_DB_PASS
-    echo "  from db:   "$FROM_DB
-    echo "  from host: "$FROM_DB_HOST
-    echo ""
-    echo "  to user: "$TO_DB_USER
-    echo "  to pass: "$TO_DB_PASS
-    echo "  to db:   "$TO_DB
-    echo "  to host: "$TO_DB_HOST
-    echo ""
-    echo "  find:    "$FIND
-    echo "  replace: "$REPLACE
-    echo ""
-}
+if [[ ! -z $SOURCE_FILE ]] && [[ -f $SOURCE_FILE ]]
+then
+    if [[ -z $TO_DB ]] && [[ ! -z $1 ]]
+    then
+        TO_DB=$1
+        shift
+    fi
+fi
+if [[ -z $FROM_DB ]] && [[ ! -z $1 ]]
+then
+    FROM_DB=$1
+    shift
+fi
+if [[ -z $TO_DB ]] && [[ ! -z $1 ]]
+then
+    TO_DB=$1
+    shift
+fi
+FIND=$1
+REPLACE=$2
 
 # SET FROM DB FLAGS
 if [ -z $SOURCE_FILE ]
@@ -319,20 +395,23 @@ else
     STRUCTURE_FLAG='';
 fi
 
-# HELP
-if [ -z $SOURCE_FILE ]
+# VALIDATE INPUT
+if [[ ! -z $FIND && -z $REPLACE  ]]
 then
-    if [ -z $FROM_DB ] || [[ -z $TO_DB && $DUMP -ne 1 ]] || [[ ! -z $FIND && -z $REPLACE  ]]
-    then
-        usage
-        exit 0
-    fi
-else
-    if [ -z $TO_DB ] || [[ ! -z $FIND && -z $REPLACE  ]]
-    then
-        usage
-        exit 0
-    fi
+    echo "Must specify both FIND and REPLACE if using find and replace"
+    exit 1
+elif [[ $DUMP -eq 0 &&  ! -f $SOURCE_FILE && -z $FROM_DB ]]
+then
+    echo "Must specify a SOURCE_FILE or FROM_DB"
+    exit 1
+elif [[ -z $FROM_DB && $DUMP -eq 1 ]]
+then
+    echo "Must specify a FROM_DB"
+    exit 1
+elif [[ -z $TO_DB && $DUMP -eq 0 ]]
+then
+    echo "Must specify a TO_DB"
+    exit 1
 fi
 
 # Print config if testing
@@ -346,6 +425,58 @@ MYSQL_FLAGS="$FROM_DB_USER_FLAG $FROM_DB_PASS_FLAG $FROM_DB_HOST_FLAG"
 MYSQLDUMP_FLAGS="$STRUCTURE_FLAG $FROM_DB_USER_FLAG $FROM_DB_PASS_FLAG $FROM_DB_HOST_FLAG"
 
 # 2. take a dump
+# a. determine what file to use
+if [ -z $SOURCE_FILE ]
+then
+    SOURCE_FILE="$FROM_DB.sql"
+fi
+# b. determine if we should overwrite
+if [[ -f $SOURCE_FILE ]] && [[ $DUMP -eq 1 ]]
+then
+    # if we are dumping, then we need to check if force is set and delete the file or error
+    if [ $FORCE -eq 1 ]
+    then
+        OVERWRITE=1
+        echo "Overwriting dump file..."
+    else
+        echo "Dump file already exists! Use --force or --overwrite to overwrite, or delete the dump file manually."
+        exit 1
+    fi
+fi
+# c. determine if we should take a dump (assume we always will if there is no source file)
+if [[ ! -f $SOURCE_FILE ]] || [[ $OVERWRITE -eq 1 ]]
+then
+    # i. check if from db exists
+    echo "Check if $FROM_DB exists..."
+    if [ $TEST -eq 1 ]
+    then
+        echo "  $ echo \"show databases\" | $mysql $MYSQL_FLAGS | grep \"^$FROM_DB$\" > /dev/null"
+    else
+        echo "show databases" | $mysql $MYSQL_FLAGS | grep "^$FROM_DB$" > /dev/null
+    fi
+    if [ $? -ne 0 ]
+    then
+        echo "The from database $FROM_DB does not exist."
+        exit 1
+    fi
+    # ii. take a dump
+    if [ $TEST -eq 1 ]
+    then
+        takeadump $SOURCE_FILE
+    else
+        echo -n "" > $SOURCE_FILE
+        takeadump $SOURCE_FILE
+    fi
+    # iii. if dumping, stop here
+    if [ $DUMP -eq 1 ]
+    then
+        echo "Done."
+        exit 0
+    fi
+else
+    echo "Using mysql dump file $SOURCE_FILE..."
+fi
+
 if [ -z $SOURCE_FILE ]
 then
     SOURCE_FILE="$FROM_DB.sql"
@@ -398,6 +529,10 @@ then
         fi
     fi
 else
+    if [ $DUMP -eq 1 ]
+    then
+        exit 1
+    fi
     if [ ! -f $SOURCE_FILE ]
     then
         echo "Source file $SOURCE_FILE does not exist."
@@ -493,16 +628,36 @@ else
     then
         if [ $IGNORE_DEFINER -eq 1 ]
         then
-            echo "  $ (echo $IMPORT_FLAGS; cat $SOURCE_FILE | grep -v "DEFINER") | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB"
+            if [ $IGNORE_AUTO_INCREMENT -eq 1 ]
+            then
+                echo "  $ (echo $IMPORT_FLAGS; cat $SOURCE_FILE | grep -v \"DEFINER\" | sed \"s/ AUTO_INCREMENT=[0-9]*//g\") | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB"
+            else
+                echo "  $ (echo $IMPORT_FLAGS; cat $SOURCE_FILE | grep -v \"DEFINER\") | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB"
+            fi
         else
-            echo "  $ (echo $IMPORT_FLAGS; cat $SOURCE_FILE) | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB"
+            if [ $IGNORE_AUTO_INCREMENT -eq 1 ]
+            then
+                echo "  $ (echo $IMPORT_FLAGS; cat $SOURCE_FILE | sed \"s/ AUTO_INCREMENT=[0-9]*//g\") | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB"
+            else
+                echo "  $ (echo $IMPORT_FLAGS; cat $SOURCE_FILE) | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB"
+            fi
         fi
     else
         if [ $IGNORE_DEFINER -eq 1 ]
         then
-            (echo -e $IMPORT_FLAGS; cat $SOURCE_FILE | grep -v "DEFINER") | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB
+            if [ $IGNORE_AUTO_INCREMENT -eq 1 ]
+            then
+                (echo -e $IMPORT_FLAGS; cat $SOURCE_FILE | grep -v "DEFINER" | sed "s/ AUTO_INCREMENT=[0-9]*//g") | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB
+            else
+                (echo -e $IMPORT_FLAGS; cat $SOURCE_FILE | grep -v "DEFINER") | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB
+            fi
         else
-            (echo -e $IMPORT_FLAGS; cat $SOURCE_FILE) | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB
+            if [ $IGNORE_AUTO_INCREMENT -eq 1 ]
+            then
+                (echo -e $IMPORT_FLAGS; cat $SOURCE_FILE | sed "s/ AUTO_INCREMENT=[0-9]*//g") | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB
+            else
+                (echo -e $IMPORT_FLAGS; cat $SOURCE_FILE) | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB
+            fi
         fi
     fi
 fi
