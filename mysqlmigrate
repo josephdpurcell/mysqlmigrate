@@ -635,7 +635,7 @@ then
 fi
 
 # b. import
-if [ -z $IMPORT_FLAGS ]
+if [ -z "$IMPORT_FLAGS" ]
 then
     BOOT_DATA=''
 else
@@ -660,16 +660,16 @@ else
         then
             if [ $IGNORE_AUTO_INCREMENT -eq 1 ]
             then
-                echo "  $ (echo -n $BOOT_DATA; cat $SOURCE_FILE | grep -v \"DEFINER\" | sed \"s/ AUTO_INCREMENT=[0-9]*//g\") | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB"
+                echo "  $ (echo $BOOT_DATA; cat $SOURCE_FILE | grep -v \"DEFINER\" | sed \"s/ AUTO_INCREMENT=[0-9]*//g\") | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB"
             else
-                echo "  $ (echo -n $BOOT_DATA; cat $SOURCE_FILE | grep -v \"DEFINER\") | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB"
+                echo "  $ (echo $BOOT_DATA; cat $SOURCE_FILE | grep -v \"DEFINER\") | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB"
             fi
         else
             if [ $IGNORE_AUTO_INCREMENT -eq 1 ]
             then
-                echo "  $ (echo -n $BOOT_DATA; cat $SOURCE_FILE | sed \"s/ AUTO_INCREMENT=[0-9]*//g\") | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB"
+                echo "  $ (echo $BOOT_DATA; cat $SOURCE_FILE | sed \"s/ AUTO_INCREMENT=[0-9]*//g\") | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB"
             else
-                echo "  $ (echo -n $BOOT_DATA; cat $SOURCE_FILE) | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB"
+                echo "  $ (echo $BOOT_DATA; cat $SOURCE_FILE) | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB"
             fi
         fi
     else
@@ -677,16 +677,16 @@ else
         then
             if [ $IGNORE_AUTO_INCREMENT -eq 1 ]
             then
-                (echo -n $BOOT_DATA; cat $SOURCE_FILE | grep -v "DEFINER" | sed "s/ AUTO_INCREMENT=[0-9]*//g") | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB
+                (IFS='%'; echo $BOOT_DATA; cat $SOURCE_FILE | grep -v "DEFINER" | sed "s/ AUTO_INCREMENT=[0-9]*//g"; unset IFS) | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB
             else
-                (echo -n $BOOT_DATA; cat $SOURCE_FILE | grep -v "DEFINER") | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB
+                (IFS='%'; echo $BOOT_DATA; cat $SOURCE_FILE | grep -v "DEFINER"; unset IFS) | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB
             fi
         else
             if [ $IGNORE_AUTO_INCREMENT -eq 1 ]
             then
-                (echo -n $BOOT_DATA; cat $SOURCE_FILE | sed "s/ AUTO_INCREMENT=[0-9]*//g") | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB
+                (IFS='%'; echo $BOOT_DATA; cat $SOURCE_FILE | sed "s/ AUTO_INCREMENT=[0-9]*//g"; unset IFS) | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB
             else
-                (echo -n $BOOT_DATA; cat $SOURCE_FILE) | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB
+                (IFS='%'; echo $BOOT_DATA; cat $SOURCE_FILE; unset IFS) | $mysql --default-character-set=utf8 $TO_DB_USER_FLAG $TO_DB_PASS_FLAG $TO_DB_HOST_FLAG $TO_DB
             fi
         fi
     fi
