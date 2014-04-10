@@ -67,7 +67,7 @@ OPTIONS SUMMARY
         -t, --test                  run in test mode (prints config and commands)
         -d, --dump                  only do a database dump
         --no-drop                   don't drop the database
-        --bootstrap                 a SQL file to run before importing the database (e.g. variables)
+        --bootstrap FILE            a SQL file to run before importing the database (e.g. variables)
         --innodb-file-format FORMAT set the innodb_file_format (i.e. Barracuda or Antelope)
                                     NOTE: this sets it globally which will stick and affect the entire server
         --innodb-file-per-table ON  sets innodb_file_per_table (can be ON or OFF)
@@ -79,6 +79,7 @@ OPTIONS SUMMARY
         -s, --source FILE           use a source file instead of pulling FROM_DB
         -u, --user USER             the FROM_DB and TO_DB user
         -p, --password PASS         the FROM_DB and TO_DB password
+        --host HOSTNAME             the FROM_HOST and TO_HOST hostname
         --from-user USER            the FROM_DB user
         --from-password PASS        the FROM_DB password
         --from-host HOST            the FROM_DB host
@@ -193,9 +194,7 @@ function takeadump()
 
 # read parameters
 SHORTOPTS="hvtdfs:u:p:"
-LONGOPTS="help,version,test,dump,no-drop,bootstrap,overwrite,force,innodb-file-format,innodb-file-per-table,ignore-definer,ignore-auto-increment,net-buffer-length,max-allowed-packet,user,password,from-user,from-password,from-host,from-db,to-user,to-password,to-host,to-db,structure:"
-ARGS=$(getopt -s bash --options $SHORTOPTS --longoptions $LONGOPTS --name $PROGNAME -- "$@" )
-#eval set -- "$ARGS"
+LONGOPTS="help,version,test,dump,no-drop,bootstrap,overwrite,force,innodb-file-format,innodb-file-per-table,ignore-definer,ignore-auto-increment,net-buffer-length,max-allowed-packet,user,password,host,from-user,from-password,from-host,from-db,to-user,to-password,to-host,to-db,structure:"
 while true
 do
     case $1 in
@@ -281,6 +280,11 @@ do
             shift
             FROM_DB_PASS=$1
             TO_DB_PASS=$1
+            ;;
+        --host)
+            shift
+            FROM_DB_HOST=$1
+            TO_DB_HOST=$1
             ;;
         --from-user)
             shift
