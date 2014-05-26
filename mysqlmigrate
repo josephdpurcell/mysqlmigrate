@@ -493,8 +493,6 @@ then
         echo "Done."
         exit 0
     fi
-else
-    echo "Using mysql dump file $SOURCE_FILE..."
 fi
 
 if [ -z $SOURCE_FILE ]
